@@ -1,0 +1,27 @@
+BATTERY +  ----------->  SOLENOID +    (solenoid positive to battery positive)
+BATTERY -  --------------------------------------+-------------- GND (common)
+                                                  |
+                                              SOLENOID -
+                                                  |
+                                               MOSFET DRAIN (D)
+MOSFET SOURCE (S) -------------------------------+-------------- GND
+MOSFET GATE -----|220Ω|------ Arduino digital pin (auto_fire_pin)
+                |
+               100k pull-down to GND (optional)
+               
+Receiver (Rx):
+- CH3 signal wire --------------> Arduino pin pulse_input_pin (reads PWM)
+- Rx Vcc (5V) -------------------> 5V BEC output (or ESC BEC)
+- Rx GND -----------------------> GND (common)
+
+Arming switch / Lock pin:
+- Mechanical switch or microswitch wired to Arduino digital pin arm_switch_pin (HIGH when safety removed/armed)
+  (OR use a simple jumper/plug to indicate safety pin removed)
+
+Power LED:
+- Small LED + resistor wired across BATTERY + and BATTERY - (visible from outside)
+
+Notes:
+- If solenoid coil requires >12V or high current, ensure MOSFET and diode ratings match.
+- If using a solenoid with separate power rail (e.g., 12V) ensure that solenoid negative shares common ground with Arduino/Rx.
+- Use proper wire gauge.
