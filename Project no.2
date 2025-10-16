@@ -1,0 +1,151 @@
+/* Hydra-lite weapon safety & fire controller
+   - Arduino Nano / Pro Mini (5V)
+   - Reads Rx CH (PWM from receiver) on pulseInputPin
+   - Requires an external arm switch (physical safety) on armSwitchPin
+   - Controls solenoid via MOSFET on solenoidPin (low-side switching)
+   - Implements failsafe: if no valid PWM or PWM < SAFETY_MIN, weapon is disabled
+   - Requires deliberate arm sequence: hold weapon stick high > ARM_STICK_THRESHOLD for ARM_HOLD_MS
+   - Single-shot firing: if armed and trigger > TRIGGER_THRESHOLD -> energize solenoid for FIRE_MS
+   - After fire, requires disarm (or time reset) before next fire (simple one-shot safety)
+   - Optional battery voltage monitor on analog pin (requires voltage divider)
+   - IMPORTANT: tune constants to match your transmitter's pulse widths and hardware behavior
+*/
+
+const uint8_t pulseInputPin = 2;   // Rx CH3 signal input (digital pin)
+const uint8_t solenoidPin   = 9;   // MOSFET gate control (PWM capable but using digital)
+const uint8_t armSwitchPin  = 7;   // Physical arm/safety switch input (HIGH when safety OFF -> armed)
+const uint8_t ledArmedPin   = 13;  // onboard LED or external indicator
+// Optional battery monitor:
+const bool USE_BATT_MONITOR = false;
+const uint8_t battSensePin = A0;   // analog pin if battery monitor used
+const float VOLT_DIVIDER_RATIO = 2.0; // change if using divider
+
+// Timing and thresholds (tune for your Tx)
+const unsigned long ARM_HOLD_MS = 2000UL;      // hold stick high this long to arm
+const unsigned int ARM_STICK_THRESHOLD = 1700; // PWM width (us) above this considered "stick high"
+const unsigned int TRIGGER_THRESHOLD = 1700;   // PWM width to fire
+const unsigned int SAFETY_MIN = 900;           // below this — consider Rx lost/failsafe
+const unsigned long FIRE_MS = 200;             // how long to energize solenoid (ms) - tune as needed
+const unsigned long MIN_TIME_BETWEEN_SHOTS = 1000; // minimal time between shots
+const unsigned long FAILSAFE_CHECK_INTERVAL = 200; // check for failsafe (ms)
+
+unsigned long lastShotTime = 0;
+bool isArmed = false;
+bool shotFired = false;
+unsigned long armHoldStart = 0;
+unsigned long lastFailsafeCheck = 0;
+
+void setup() {
+  pinMode(pulseInputPin, INPUT);
+  pinMode(solenoidPin, OUTPUT);
+  digitalWrite(solenoidPin, LOW);
+  pinMode(armSwitchPin, INPUT_PULLUP); // use internal pullup if switch shorts to GND when armed
+  pinMode(ledArmedPin, OUTPUT);
+  digitalWrite(ledArmedPin, LOW);
+  Serial.begin(115200);
+  Serial.println("Weapon controller boot");
+}
+
+unsigned int readRxPulse() {
+  // pulseIn returns microseconds of HIGH pulse, timeout 25000us (25 ms)
+  unsigned long pul = pulseIn(pulseInputPin, HIGH, 30000UL);
+  if (pul == 0) return 0; // no pulse / timeout
+  return (unsigned int)pul;
+}
+
+float readBatteryVoltage() {
+  if (!USE_BATT_MONITOR) return -1.0;
+  int raw = analogRead(battSensePin);
+  float v = (raw / 1023.0) * 5.0 * VOLT_DIVIDER_RATIO; // depends on divider
+  return v;
+}
+
+void fireSolenoidOnce() {
+  unsigned long now = millis();
+  if (now - lastShotTime < MIN_TIME_BETWEEN_SHOTS) return; // safety debounce
+  Serial.println("FIRE: solenoid on");
+  digitalWrite(solenoidPin, HIGH);
+  delay(FIRE_MS);
+  digitalWrite(solenoidPin, LOW);
+  Serial.println("FIRE: solenoid off");
+  lastShotTime = millis();
+  shotFired = true;
+  // require manual disarm (or you can set isArmed=false here to force re-arm)
+  isArmed = false;
+  digitalWrite(ledArmedPin, LOW);
+}
+
+bool checkFailsafe(unsigned int pulseWidth) {
+  // If no valid pulse or pulse below SAFETY_MIN consider failsafe
+  if (pulseWidth < SAFETY_MIN) return true;
+  return false;
+}
+
+void loop() {
+  unsigned int rxPulse = readRxPulse(); // microseconds, typical 1000-2000
+  unsigned long now = millis();
+
+  // basic failsafe: if no pulse or pulse too low, disarm weapon immediately
+  if (checkFailsafe(rxPulse)) {
+    if (isArmed) {
+      Serial.println("Failsafe or RX lost - Auto disarm");
+    }
+    isArmed = false;
+    digitalWrite(ledArmedPin, LOW);
+    // make sure solenoid off
+    digitalWrite(solenoidPin, LOW);
+    shotFired = false;
+    delay(10);
+    return;
+  }
+
+  // optional battery read
+  if (USE_BATT_MONITOR) {
+    float vbatt = readBatteryVoltage();
+    static unsigned long lastBattSerial = 0;
+    if (now - lastBattSerial > 2000) {
+      Serial.print("Batt V: "); Serial.println(vbatt);
+      lastBattSerial = now;
+    }
+    // optionally inhibit firing if batt low
+    if (vbatt > 0 && vbatt < 6.5) {
+      // too low for 3S LiPo - disable firing
+      isArmed = false;
+      digitalWrite(ledArmedPin, LOW);
+    }
+  }
+
+  // read physical arm switch (HIGH when armed if using pullup)
+  bool armSwitchState = (digitalRead(armSwitchPin) == LOW) ? true : false; 
+  // Note: depends on your wiring: adjust logic if your switch gives HIGH when armed
+  // We assume switch closed to ground when safety removed -> LOW.
+
+  // ARM sequence:
+  // If switch indicates armed physically AND stick is held high for ARM_HOLD_MS, then arm
+  if (!isArmed) {
+    if (armSwitchState && rxPulse >= ARM_STICK_THRESHOLD) {
+      if (armHoldStart == 0) armHoldStart = now;
+      else {
+        if (now - armHoldStart >= ARM_HOLD_MS) {
+          isArmed = true;
+          digitalWrite(ledArmedPin, HIGH); // visual armed indicator
+          Serial.println("Weapon ARMED");
+          armHoldStart = 0;
+          shotFired = false;
+        }
+      }
+    } else {
+      armHoldStart = 0;
+    }
+  }
+
+  // If armed, and trigger input detected above TRIGGER_THRESHOLD, and not fired, then fire
+  if (isArmed && !shotFired) {
+    if (rxPulse >= TRIGGER_THRESHOLD) {
+      fireSolenoidOnce();
+    }
+  }
+
+  // small loop delay for responsiveness
+  delay(10);
+}
