@@ -1,0 +1,20 @@
+BATTERY+ ---- fuse ----- REMOVABLE_SWITCH (external) ---- MAIN_POS_BUS ---+--> ESC1(+)
+                                                                          +--> ESC2(+)
+                                                                          +--> SOLENOID_POWER(+)  (if solenoid runs on battery)
+BATTERY- --------------------------------------------------------------+--> ESC1(-), ESC2(-), SOLENOID(-)
+                                                                          (common ground to Rx/Arduino)
+
+ESC1 signal (throttle left) --> RX CH1
+ESC2 signal (throttle right) --> RX CH2
+
+If using BEC:
+  ESC1 BEC (5V)  --> RX Vcc  (only ONE BEC active; disable others)
+  Or UBEC 5V --> RX Vcc
+
+RX CH3 (weapon channel) --> Arduino pulse input (or directly to relay if no Arduino)
+Arduino (or Rx) --> Relay/MOSFET gate --> Solenoid negative
+Solenoid positive -> MAIN_POS_BUS
+
+POWER LED: small LED + resistor across BATTERY+ and BATTERY- (visible externally)
+ARM SWITCH: mechanical switch wired to Arduino arm input (or wired to cut main power physically)
+LOCK PIN: mechanical pin (no wiring) used during tech inspection
